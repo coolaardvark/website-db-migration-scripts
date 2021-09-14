@@ -6,8 +6,8 @@
    database.  The listed depedencies are grouped by database.  It requires a version of server management objects SMO to be installed
    on the machine.
 .EXAMPLE
-   The following command lists all dependencies on oakridge
-   Dump-Dependencies -ServerName oakridge
+   The following command lists all dependencies on server2
+   Dump-Dependencies -ServerName server2
 .Parameter ServerName
    Server is the name of the server you wish to list dependencies on. (mandatory).
 .Parameter FilePath
@@ -37,7 +37,8 @@ $serverObject.Databases | Where-Object { $_.IsSystemObject -eq $false } | ForEac
 	    referenced_database_name AS ReferencedDatabase,
 	    referenced_schema_name + '.' + referenced_entity_name AS ReferencedObject
     FROM sys.sql_expression_dependencies
-        WHERE referenced_database_name IS NOT NULL")
+        WHERE referenced_database_name IS NOT NULL 
+            AND referenced_database_name <> '$dbName'")
     
     if ($resultSet.Tables[0].Rows.Count -gt 0) {
         $dbDetails = "=== $($dbName) has external references ===`r`n"
@@ -45,7 +46,7 @@ $serverObject.Databases | Where-Object { $_.IsSystemObject -eq $false } | ForEac
             $dbDetails += "$($_.ReferencingObject) => [$($_.ReferencedDatabase)].$($_.ReferencedObject)`r`n"
         }
 
-        $allDetails += $dbDetails
+        $allDetails += "`r`n$dbDetails"
     }
 })
 

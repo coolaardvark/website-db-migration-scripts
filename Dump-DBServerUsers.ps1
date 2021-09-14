@@ -35,7 +35,11 @@
     other Script switch is not given everthing is dumped.  May be combined with either the SpesificLogin 
     and SpesificDatabase parameters.
 .OUTPUTS
-   none
+   The script will dump the generated SQL to screen if no FilePath is spesified.  If one is the file or files
+   (depending on the options selected) will be saved there.  Also if logins are requested and a FilePath is set,
+   a CSV file called password-helper will saved in the same directory as the slq script/s.  This file can be used
+   with the Set-SQLPasswords script to set the passwords for SQL users.  The passwords have to be added to the
+   CSV file, since this script has no way of getting them!
 #>
 
 Param (
@@ -65,7 +69,7 @@ Set-StrictMode -Version Latest
 $nl = "`r`n"
 
 Function Add-LoginScriptSection {
-    Param ($LoginName)
+    Param ($LoginName, [ref]$SQLLogins)
 
     $loginType = $serverObject.Logins[$LoginName].LoginType
 
@@ -76,13 +80,14 @@ Function Add-LoginScriptSection {
     $loginString += "CREATE LOGIN [$($LoginName)] "
 
     if ($loginType -eq 'SqlLogin') {
-
         $loginString += "WITH PASSWORD=N'$(New-RandomPassword)', CHECK_EXPIRATION=OFF, CHECK_POLICY=OFF;$nl"
+
+        $SQLLogins.Value += $LoginName
     }
     elseif ($loginType -eq 'WindowsUser' -or $loginType -eq 'WindowsGroup') {
         $loginString += "FROM WINDOWS;$nl"
     }
-    $logingString += "$($nl)GO$nl"
+    $loginString += "$($nl)GO$nl"
 
     Show-ProgressMessage -Message "Scripting adding of server roles for $LoginName"
 
@@ -90,7 +95,7 @@ Function Add-LoginScriptSection {
     $serverObject.Logins[$LoginName].ListMembers() | ForEach-Object {
         $serverRolesString += "exec sp_addsrvrolemember @loginame = '$($LoginName)', @rolename = '$($_)'; $nl"
     }
-    $serverRoleString += "$($nl)GO$nl"
+    $serverRolesString += "$($nl)GO$nl"
 
     Show-ProgressMessage -Message "Scripting adding of server permissions for $LoginName"
 
@@ -374,18 +379,25 @@ Function New-ScriptByServer {
     Param ($ScriptWhat)
     $serverScript = "USE [master]$($nl)GO$nl"
 
+    $SQLLogins = @()
+
     $serverObject.Logins | ForEach-Object({
         $loginName = $_.Name
 
         if ((Script-ThisUser -User $_ -LoginsToScript $logins) -eq [ScriptUser]::Yes) {
             if ($ScriptWhat -eq [ScriptObjects]::Logins -or $ScriptWhat -eq [ScriptObjects]::Everything) {
-                $serverScript += Add-LoginScriptSection -LoginName $loginName
+                $serverScript += Add-LoginScriptSection -LoginName $loginName -SQLLogins ([ref]$SQLLogins)
             }
             if ($ScriptWhat -eq [ScriptObjects]::Users -or $ScriptWhat -eq [ScriptObjects]::Everything) {
                 $serverScript += New-UserScriptSectionByUser -UserName $loginName
             }
         }
     })
+
+    # Only dump this 'helper file' if we have any SQL users
+    if ($SQLLogins.Count -gt 0) {
+        Dump-PasswordHelperFile($SQLLogins)
+    } 
 
     $serverScript
 }
@@ -440,7 +452,7 @@ Function Script-ThisUser {
 
     # Only User objects have a UserType
     if ($objectType -eq 'User') {
-        if (($scriptUser -eq [ScriptUser]::NotDecided) -and ($User.UserType -ne 'SqlUser')) {
+        if (($scriptUser -eq [ScriptUser]::NotDecided) -and ($User.UserType -ne 'SqlLogin')) {
             $scriptUser = [ScriptUser]::No
             Show-ProgressMessage -message "Skipping non-loginable user $userName"
         }
@@ -464,6 +476,26 @@ Function Script-ThisUser {
     }
 
     $scriptUser
+}
+
+Function Dump-PasswordHelperFile {
+    Param ($SQLLogins)
+
+    # It only makes sense for us to output anything when the script is
+    # saving its output to a file
+    if ($FilePath -ne '') {
+        Show-ProgressMessage -message "SQL users found, saving password helper file"
+
+        $SQLPasswordHelperContents = "Username,Password $nl"
+
+        $SQLLogins.ForEach({
+            $SQLPasswordHelperContents += "$_,$nl"
+        })
+
+        # Extract just the path from our output file 
+        $PasswordHelperFile = "$($FilePath.Substring(0, $FilePath.LastIndexOf('\') +1 ))password-helper.csv"
+        $SQLPasswordHelperContents | Out-File -FilePath $PasswordHelperFile
+    }
 }
 
 Function Show-ProgressMessage {
@@ -585,6 +617,7 @@ try {
 
                     if ($FilePath -ne '') {
                         $databaseScript | Out-File -FilePath "$($FilePath)database-$($_).sql"
+                        Show-ProgressMessage -message "Permissions for db $_ dumped to $($FilePath)database-$($_).sql"
                     }
                     else {
                         "Database $($_)$($nl)$databaseScript$($nl)"
@@ -600,23 +633,49 @@ try {
         ([ScriptByType]::Login) { 
             Show-ProgressMessage -message "Scripting by login"
 
+            $SQLLogins = @()
+
             $SpesificLogins.ForEach({
                 Show-ProgressMessage -message "Working on login $_"
 
                 $userScript = "USE [master]$($nl)GO$nl"
 
                 if ($ScriptObjects -eq [ScriptObjects]::Logins -or $ScriptObjects -eq [ScriptObjects]::Everything) {
-                    $userScript += Add-LoginScriptSection -LoginName $_
+                    # We get our user script back and flag showing if the user is an SQL user
+                    # this should be any array, but I just can't get the function to return one of the dam things
+                    $scriptTemp = Add-LoginScriptSection -LoginName $_
+                    
+                    $userScript += $scriptTemp.substring(0, $scriptTemp.indexof('|'))
+
+                    if ($scriptTemp.subscript($scriptTemp.indexof('|')) -eq '1') {
+                        $SQLLogins += $_
+                    }
                 }
                 if ($ScriptObjects -eq [ScriptObjects]::Users -or $ScriptObjects -eq [ScriptObjects]::Everything) {
                     $userScript += New-UserScriptSectionByUser -UserName $_
                 }
 
                 if ($FilePath -ne '') {
-                    $userScript | Out-File -FilePath "$($FilePath)user-$($_).sql"
+                    # We can't allow full domain user names here, the slash will mess
+                    # up the path, so strip domain components for the file name
+                    $stripedUserName = ''
+                    if ($_.contains('\')) {
+                        $stripedUserName = $_.substring($_.indexof('\') + 1)
+                    }
+                    else {
+                        $stripedUserName = $_
+                    }
+
+                    $userScript | Out-File -FilePath "$($FilePath)user-$($stripedUserName).sql"
+                    Show-ProgressMessage -message "Permissions for user $stripedUserName dumped to $($FilePath)user-$($stripedUserName).sql"
                 }
                 else {
                     "User $($_)$($nl)$userScript$($nl)"
+                }
+
+                # Only dump this 'helper file' if we have any SQL users
+                if ($SQLLogins.Count -gt 0) {
+                    Dump-PasswordHelperFile($SQLLogins)
                 }
             })
 
@@ -629,6 +688,7 @@ try {
 
             if ($FilePath -ne '') {
                 $scriptString | Out-File -FilePath $FilePath
+                Show-ProgressMessage -message "Permissions for $serverName dumpped to $FilePath"
             }
             else {
                 "Script for Server $serverName$($nl)$scriptString"

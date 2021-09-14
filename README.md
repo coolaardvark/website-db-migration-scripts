@@ -40,6 +40,14 @@ work the way I needed.
 ## Dump-Dependencies.ps1
 Lists all inter-database links for the given database server.
 
+## Get-ActiveWebSiteConnectionStrings.ps1
+This script dumps any connection strings found in either the connectionStrings 
+or appplicationSettings sections of the web.config files used by all sites hosted by the local instance of IIS.  I normally use this for getting a list of sites that will be down 
+when writing the change control emails for server updates.
+There are methods in the WebAdministration powershell module that in theory can do this, but
+I couldn't get them to work a sensible way, so I use Xpath commands to navigate the XML
+config file format.
+
 ## Migrate-WebSite.ps1
 copies arcoss the network the given site from 1 IIS server to another.  
 Uses Web Deploy to do this and requires that the web deploy port (8172) 

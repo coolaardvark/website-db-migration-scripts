@@ -1,8 +1,7 @@
 {
-    "DevServer": "development enviroment web server FQND",
-    "StagingServer": "staging enviroment web server FQND",
-    "LiveServer": "live enviroment web server FQND",
-    "CertThumbPrint": "thumbprint of web servers https certificate",
-    "BaseSitePath": "C:\\WebSites\\",
-    "DefaultDomain": "set to your base domain name e.g test.com"
+    "DevServer": "dev.server.name",
+    "StagingServer": "staging.server.name",
+    "LiveServer": "live.server.name",
+    "AardmanCertThumbPrint": "thumb print here",
+    "BaseSitePath": "E:\\WebSites\\"
 }
