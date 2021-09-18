@@ -32,17 +32,19 @@ all users should have only the rights they actually need).
 
 ## Dump-DBServerUsers.ps1
 The single most used script here!  It's usefulness far outlived the migration
-project!  I can't claim much credit for this script, but I can't find page 
-where I found the script at the moment (I'll update when I find the page).
-All I did was to put give it a front end and make some tweaks to get it 
-work the way I needed.
+project!  I can't claim much credit for this script, much of the work was done
+in [Jeffery Yao MSSQL tips article](https://www.mssqltips.com/sqlservertip/4572/cloning-a-sql-server-login-with-all-permissions-using-powershell/) 
+I tweaked it to work the way I wanted and brought it in to line with our in
+house Powershell 'style'
 
 ## Dump-Dependencies.ps1
-Lists all inter-database links for the given database server.
+Lists all inter-database links for the given database server, useful for
+figuring out which databases had to be moved at the smae time
 
 ## Get-ActiveWebSiteConnectionStrings.ps1
 This script dumps any connection strings found in either the connectionStrings 
-or appplicationSettings sections of the web.config files used by all sites hosted by the local instance of IIS.  I normally use this for getting a list of sites that will be down 
+or appplicationSettings sections of the web.config files used by all sites hosted by the local instance of IIS.  
+I normally use this for getting a list of sites that will be down 
 when writing the change control emails for server updates.
 There are methods in the WebAdministration powershell module that in theory can do this, but
 I couldn't get them to work a sensible way, so I use Xpath commands to navigate the XML
