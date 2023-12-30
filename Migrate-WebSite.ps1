@@ -36,8 +36,6 @@ Add-PSSnapin WDeploySnapin3.0
 $sourceSettingsFile = ''
 $destinationSettingsFile = ''
 
-$baseDomainName = 'test.com'
-
 try {
     # Set default values for non mandatory parameters
     if (-not $DestinationServer) {
@@ -45,7 +43,7 @@ try {
     }
 
     if (-not $SiteUrl) {
-        $SiteUrl = 'https://' + $SiteName + $baseDomainName
+        $SiteUrl = 'https://' + $SiteName + '.aardman.com'
     }
 
     if (-not $ServerRootPath.EndsWith('\')) {

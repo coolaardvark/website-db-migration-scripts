@@ -1,48 +1,33 @@
-﻿<#
-.Synopsis
-    Dumps connection strings found web.config files for all sites hosted by the local IIS server
-.DESCRIPTION
-   This script dumps any connection strings found in either the connectionStrings 
-   or appplicationSettings sections of the web.config files used by all sites hosted by the local
-   instance of IIS 
-#>
-Import-Module WebAdministration
+﻿Import-Module WebAdministration
 
 function Get-ConStringsFromSection {
-    param ($Config, $Site)
+    param ($Config)
     
     [string] $conStrings = ''
-    [string] $returnValue = ''
-    Write-Host 'Searching connectionStrings section'  
+    [string] $returnValue = "no connection strings in connectionStrings section`r`n" 
 
     $conStringNodes = Select-Xml -Xml $Config -XPath '/configuration/connectionStrings//add'
     if ($conStringNodes -ne $null) {
 
         $count = 0
         $conStringNodes | Foreach {
-            $conStrings += "$($_.Node.Attributes['name'].Value) : $($_.Node.Attributes['connectionString'].Value)`n`r"
+            $conStrings += "$($_.Node.Attributes['name'].Value) : $($_.Node.Attributes['connectionString'].Value)`r`n"
             $count ++
         }
-
-        Write-Host "$count connection strings found in $($_.Name) connectionStrings"
-    }
-    else {
-        Write-Host 'Nothing found in connectionStrings'
     }
 
     if ($conStrings -ne '') {
-        $returnValue = "$Site connection strings in connectionStrings section`n`r$conStrings"
+        $returnValue = "= connection strings in connectionStrings section =`r`n$conStrings"
     }
     
     $returnValue
 }
 
 function Get-ConStringsFromApplicarionSettings {
-    param ($Config, $Site)
+    param ($Config)
 
     [string] $conStrings = ''
-    [string] $returnValue = ''
-    Write-Host 'Searching applicationSettings section'
+    [string] $returnValue = "no connection strings in applicationsSettings section`r`n"
 
     # Application settings are tricky, we have a child node inside of it named with
     # the namespace of the application running, and I have no way of getting that from
@@ -59,15 +44,13 @@ function Get-ConStringsFromApplicarionSettings {
             $configValues = Select-Xml -Xml $_[0].Node -XPath 'setting/value[text()]'
             $configValues | Foreach {
                 # get the node value as string
-                $conStrings += $_.Node.InnerText
+                $conStrings += "$($_.Node.InnerText)`r`n"
             }
-            
-            Write-Host "$count connection strings found in $($_.Name) connectionStrings"
         }
     }
 
     if ($conStrings -ne '') {
-        $returnValue = "$Site connection strings in applicationSettings section`n`r$conStrings"
+        $returnValue = "= connection strings in applicationSettings section =`r`n$conStrings"
     }
 
     $returnValue
@@ -89,12 +72,14 @@ Get-ChildItem IIS:\Sites | Where { $_.state -eq 'Started'} | Foreach {
         # make sense of
         $configObject = [xml](Get-Content $configPath)
     
-        $output += Get-ConStringsFromSection -Config $configObject -Site $siteName 
-        $output += Get-ConStringsFromApplicarionSettings -Config $configObject -Site $siteName
+        $output += "=== Site $($siteName) ===`r`n"
+        $output += Get-ConStringsFromSection -Config $configObject
+        $output += Get-ConStringsFromApplicarionSettings -Config $configObject
+        $output += "`r`n"
     }
     
 }
 
 $outputPath = & { Split-Path $MyInvocation.ScriptName }
-$outputFile = Join-Path $ConfigPath '.\connectionStrings.txt'
+$outputFile = Join-Path $outputPath '.\connectionStrings.txt'
 $output | Out-File -FilePath $outputFile

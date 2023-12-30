@@ -12,7 +12,10 @@
    The full path name for the generated sql script, if not provided the script is output to the console.
 .Parameter SpesificLogins
     A user name or comma seperated list of user names, if spesifed only these users will be dumped, if omitted all users
-    (bar system and internal SQL user) will be included in the dump.
+    (bar system and internal SQL users) will be included in the dump.
+.Parameter SpesificDatabases
+    A user database name or comma seperated list of database names, if spesifed only these database will be dumped, if omitted all databases
+    (bar system databases) will be included in the dump.
 .Parameter HideProgress
     Supresses all but the start and complete messages from terminal output.  Useful for when $FilePath is not spesified
     and so the final script will end up on the console as well.
@@ -34,6 +37,9 @@
     This switch if set causes only the user and database level permissions details to be dumped, if this or the 
     other Script switch is not given everthing is dumped.  May be combined with either the SpesificLogin 
     and SpesificDatabase parameters.
+.Parameter LogTranscript
+    This switch causes the scripts logging output to go a file called dump-transcript.txt in the scripts
+    directory.  Could be used with HideProgress, but this just causes an empty file to be created!
 .OUTPUTS
    The script will dump the generated SQL to screen if no FilePath is spesified.  If one is the file or files
    (depending on the options selected) will be saved there.  Also if logins are requested and a FilePath is set,
@@ -50,9 +56,9 @@ Param (
     [Parameter(Mandatory = $false)]
     [Switch]$ByDatabase,
     [Parameter(Mandatory = $false)]
-    [string[]]$SpesificLogins,
+    [string]$SpesificLogins,
     [Parameter(Mandatory = $false)]
-    [string[]]$SpesificDatabases,
+    [string]$SpesificDatabases,
     [Parameter(Mandatory = $false)]
     [string]$FilePath,
     [Parameter(Mandatory = $false)]
@@ -60,7 +66,9 @@ Param (
     [Parameter(Mandatory = $false)]
     [Switch]$ScriptUsers,
     [Parameter(Mandatory = $false)]
-    [Switch]$HideProgress
+    [Switch]$HideProgress,
+    [Parameter(Mandatory = $false)]
+    [Switch]$LogTranscript
 )
 
 Set-StrictMode -Version Latest
@@ -71,9 +79,9 @@ $nl = "`r`n"
 Function Add-LoginScriptSection {
     Param ($LoginName, [ref]$SQLLogins)
 
-    $loginType = $serverObject.Logins[$LoginName].LoginType
-
     Show-ProgressMessage -Message "Scripting login for $LoginName"
+
+    $loginType = $serverObject.Logins[$LoginName].LoginType
 
     $loginString = "/* Login $LoginName */$nl"
     $loginString += "IF (SELECT COUNT(principal_id) FROM [sys].[server_principals] WHERE name = '$LoginName') = 0$nl"
@@ -82,7 +90,10 @@ Function Add-LoginScriptSection {
     if ($loginType -eq 'SqlLogin') {
         $loginString += "WITH PASSWORD=N'$(New-RandomPassword)', CHECK_EXPIRATION=OFF, CHECK_POLICY=OFF;$nl"
 
-        $SQLLogins.Value += $LoginName
+        # Add the details to our SQLLogins object but only if it exists!
+        if ($SQLLogins -ne $null) { 
+            $SQLLogins.Value += $LoginName
+        }
     }
     elseif ($loginType -eq 'WindowsUser' -or $loginType -eq 'WindowsGroup') {
         $loginString += "FROM WINDOWS;$nl"
@@ -146,17 +157,22 @@ Function New-UserScriptSectionByDatabase {
     Show-ProgressMessage -Message "Scripting adding users and permissions for $DatabaseName"
     $databaseScript = ''
 
-    $serverObject.Databases[$DatabaseName].Users | Where-Object {($_.LoginType -eq 'SqlLogin') -and ($_.UserType -eq 'SqlUser') -and (-not $_.IsSystemObject)} | ForEach-Object ({
+    $serverObject.Databases[$DatabaseName].Users | Where-Object {($_.LoginType -eq 'SqlLogin' -or $_.LoginType -eq 'WindowsUser') -and $_.UserType -eq 'SqlUser' -and (-not $_.IsSystemObject)} | ForEach-Object ({
         $userName = $_.Name
 
         Write-Host $userName
 
-        foreach($object in $serverObject.Logins[$userName].EnumDatabaseMappings()) {
-            if ($object.DBName -eq $DatabaseName) {
-                $databaseScript += Get-UserPermissionsByDB -DBName $DatabaseName -UserName $userName -DBObject $object
-            }
+        # We have users in some db's that don't have server logins, skip
+        # them, they are not going to be useable anyway
+        if ($serverObject.Logins[$userName]) {
+            $serverObject.Logins[$userName].EnumDatabaseMappings().ForEach({
+                $object = $_
+                
+                if ($object.DBName -eq $DatabaseName) {
+                    $databaseScript += Get-UserPermissionsByDB -DBName $DatabaseName -UserName $userName -DBObject $object
+                }
+            })
         }
-
     })
 
     $databaseScript
@@ -413,7 +429,15 @@ Function New-ScriptByDatabase {
 
         if ((Script-ThisUser -User $_ -LoginsToScript $logins) -eq [ScriptUser]::Yes) {
             if ($ScriptWhat -eq [ScriptObjects]::Logins -or $ScriptWhat -eq [ScriptObjects]::Everything) {
-                $databaseScript += Add-LoginScriptSection -LoginName $userName
+                # SKip users in db's that don't exist as server logins (we have a number
+                # that have slipped across over the years)
+                if ($serverObject.Logins[$userName]) {
+                    $databaseScript += Add-LoginScriptSection -LoginName $userName
+                }
+                else {
+                    Show-ProgressMessage -Message "Skiping login $userName, they don't exist as a login on the server"
+                }
+                
             }
         }
     })
@@ -472,7 +496,7 @@ Function Script-ThisUser {
     if ($scriptUser -eq [ScriptUser]::NotDecided) {
         # The default bail out for anything we don't know about
         Show-ProgressMessage -Message "Skipping $userName (not sure what they are)"
-        $scriptUser = [ScripUser]::No
+        $scriptUser = [ScriptUser]::No
     }
 
     $scriptUser
@@ -486,7 +510,10 @@ Function Dump-PasswordHelperFile {
     if ($FilePath -ne '') {
         Show-ProgressMessage -message "SQL users found, saving password helper file"
 
-        $SQLPasswordHelperContents = "Username,Password $nl"
+        # No space allowed between our characters and the newline, that
+        # breaks powershells built in CSV handling (it includes the space
+        # as part of the member name)
+        $SQLPasswordHelperContents = "Username,Password$($nl)"
 
         $SQLLogins.ForEach({
             $SQLPasswordHelperContents += "$_,$nl"
@@ -525,12 +552,26 @@ enum ScriptObjects {
 }
 
 try {
+    $scriptPath = & { Split-Path $MyInvocation.ScriptName }
+    $logPath = Join-Path $scriptPath "dump-transcript.txt"
+
+    if ($LogTranscript -and $host.Name -eq 'ConsoleHost') {
+        Clear-Host
+
+        # Only keep 1 session log
+        if (Test-Path -PathType Leaf $logPath) { 
+            Remove-Item $logPath
+        }
+
+        Start-Transcript -Append -Path $logPath
+    }
+
     Write-Host "Working on dump of DB users from $ServerName, please wait"
 
     # Prep
     [System.Reflection.Assembly]::LoadWithPartialName('Microsoft.SqlServer.SMO') | Out-Null
 
-    $serverObject = New-Object 'Microsoft.SqlServer.Management.Smo.Server' $ServerName;
+    $serverObject = New-Object 'Microsoft.SqlServer.Management.Smo.Server' $ServerName
     if (-not $serverObject.Edition) {
         Throw "Connection to $ServerName failed"
     }
@@ -550,44 +591,87 @@ try {
     # Put any lists in to a hash for easy look ups
     # By selecting spesifics to script we are automatically going
     # to script by the type of that spesific
-    if ($SpesificLogins) {
-        $SpesificLogins.ForEach({$logins.Add($_, 1)})
-        if (-not $SpesificDatabases) {
-            $byObjectType = [ScriptByType]::Login
+    if ($SpesificLogins.Length -gt 0) {
+        if ($SpesificLogins.IndexOf(',') -gt 0) {
+            $SpesificLogins.Split.(',').ForEach({
+                $loginName = $_.Trim()
+
+                if ($serverObject.Logins[$loginName]) {
+                    $logins.Add($loginName, 1)
+                }
+                else {
+                    Write-Warning "Login $loginName not found on $ServerName, skipping"
+                }
+            })
+        }
+        else {
+            $loginName = $SpesificLogins.Trim()
+
+            if ($serverObject.Logins[$loginName]) {
+                $logins.Add($loginName, 1)
+            }
+            else {
+                # No point in going on if we only have 1 login to dump and they don't exist!
+                Throw "Login $loginName not found on $ServerName, aborting"
+            }
         }
     }
     else {
         # If no one is spesified we do everyone
         $logins.Add('__all', 1)
     }
-    if ($SpesificDatabases) {
-        $SpesificDatabases.ForEach({
-            $databases.Add($_, 1)
 
-            # Include all users that are in this database unless we are only
-            # getting spesific ones
-            # This will catch odd users like dbo, but they will be filtered
-            # out later on
-            if ($SpesificLogins) {
-                $serverObject.Databases[$_].Users | ForEach-Object ({
-                    $logins.Add($_, 1)
-                })
+    if ($SpesificDatabases.Length -gt 0) {
+        if ($SpesificDatabases.IndexOf(',') -gt 0) { 
+            $SpesificDatabases.Split(',').ForEach({
+                $databaseName = $_.Trim()
+
+                if ($serverObject.Databases[$databaseName]) {
+                    $databases.Add($databaseName, 1)
+
+                    # Include all users that are in this database unless we are only
+                    # getting spesific ones
+                    # This will catch odd users like dbo, but they will be filtered
+                    # out later on
+                    if ($SpesificLogins.Length -gt 0) {
+                        $SpesificLogins.Split(',').ForEach({
+                            $logins.Add($_, 1)
+                        })
+                    }
+                }
+                else {
+                    Write-Warning "Database $databaseName not found on $ServerName, skipping" 
+                }
+            })
+        }
+        else {
+            $databaseName = $SpesificDatabases.Trim()
+            if ($serverObject.Databases[$databaseName]) {
+                $databases.Add($databaseName, 1)
             }
-        })
-        
-        $byObjectType = [ScriptByType]::Database
+            else {
+                # Abort if we only have 1 db and it doesn't exist
+                throw "Database $databaseName not found on $ServerName, aborting" 
+            }
+        }
     }
     else {
         # Again if no db sepsified we do them all
-        $databases.Add('__all', 1)
+        $serverObject.Databases.ForEach({
+            $databaseName = $_.Name
+
+            if ($_.IsSystemObject -eq $false) { 
+                $databases.Add($databaseName, 1)
+            }
+        })
     }
  
     # We can also script by a type when not selecting spesifics of that type
     if ($byObjectType -eq [ScriptByType]::Server) {
-        if ($ByLogin) {
+        if ($ByLogin -or $SpesificLogins) {
             $byObjectType = [ScriptByType]::Login
         }
-        if ($ByDatabase) {
+        if ($ByDatabase -or $SpesificDatabases) {
             $byObjectType = [ScriptByType]::Database
         }
     }
@@ -609,24 +693,26 @@ try {
         ([ScriptByType]::Database) {
             Show-ProgressMessage -message "Scripting by Database"
             
-            $SpesificDatabases.ForEach({
-                if ($serverObject.Databases[$_]) {
-                    Show-ProgressMessage -message "Working on database $_"
+            $databases.Keys.ForEach({
+                $databaseName = $_
+
+                if ($serverObject.Databases[$databaseName]) {
+                    Show-ProgressMessage -message "Working on database $databaseName"
 
                     $databaseScript = New-ScriptByDatabase -DatabaseName $_ -ScriptWhat $scriptObjects
 
                     if ($FilePath -ne '') {
-                        $databaseScript | Out-File -FilePath "$($FilePath)database-$($_).sql"
-                        Show-ProgressMessage -message "Permissions for db $_ dumped to $($FilePath)database-$($_).sql"
+                        $databaseScript | Out-File -FilePath "$($FilePath)database-$($databaseName).sql"
+                        Show-ProgressMessage -message "Permissions for db $databaseName dumped to $($FilePath)database-$($databaseName).sql"
                     }
                     else {
-                        "Database $($_)$($nl)$databaseScript$($nl)"
+                        "Database $($databaseName)$($nl)$databaseScript$($nl)"
                     }
                 }
                 else {
-                    Write-Warning "Database $_ not found on $ServerName"
+                    Write-Warning "Database $databaseName not found on $ServerName"
                 }
-            }) 
+            })
             
             break
         }
@@ -635,24 +721,25 @@ try {
 
             $SQLLogins = @()
 
-            $SpesificLogins.ForEach({
-                Show-ProgressMessage -message "Working on login $_"
+            $logins.Keys.ForEach({
+                $loginName = $_
+                Show-ProgressMessage -message "Working on login $loginName"
 
                 $userScript = "USE [master]$($nl)GO$nl"
 
                 if ($ScriptObjects -eq [ScriptObjects]::Logins -or $ScriptObjects -eq [ScriptObjects]::Everything) {
                     # We get our user script back and flag showing if the user is an SQL user
                     # this should be any array, but I just can't get the function to return one of the dam things
-                    $scriptTemp = Add-LoginScriptSection -LoginName $_
+                    $scriptTemp = Add-LoginScriptSection -LoginName $loginName
                     
                     $userScript += $scriptTemp.substring(0, $scriptTemp.indexof('|'))
 
                     if ($scriptTemp.subscript($scriptTemp.indexof('|')) -eq '1') {
-                        $SQLLogins += $_
+                        $SQLLogins += $loginName
                     }
                 }
                 if ($ScriptObjects -eq [ScriptObjects]::Users -or $ScriptObjects -eq [ScriptObjects]::Everything) {
-                    $userScript += New-UserScriptSectionByUser -UserName $_
+                    $userScript += New-UserScriptSectionByUser -UserName $loginName
                 }
 
                 if ($FilePath -ne '') {
@@ -660,17 +747,17 @@ try {
                     # up the path, so strip domain components for the file name
                     $stripedUserName = ''
                     if ($_.contains('\')) {
-                        $stripedUserName = $_.substring($_.indexof('\') + 1)
+                        $stripedUserName = $loginName.substring($_.indexof('\') + 1)
                     }
                     else {
-                        $stripedUserName = $_
+                        $stripedUserName = $loginName
                     }
 
                     $userScript | Out-File -FilePath "$($FilePath)user-$($stripedUserName).sql"
                     Show-ProgressMessage -message "Permissions for user $stripedUserName dumped to $($FilePath)user-$($stripedUserName).sql"
                 }
                 else {
-                    "User $($_)$($nl)$userScript$($nl)"
+                    "User $($loginName)$($nl)$userScript$($nl)"
                 }
 
                 # Only dump this 'helper file' if we have any SQL users
@@ -700,7 +787,12 @@ try {
     
     Write-Host "Finished user dump of $ServerName"
 }
-Catch {
+catch {
     Write-Error "Failed with error $_"
     Write-Error "Stack trace: $($_.ScriptStackTrace)"  
+}
+finally {
+    if ($LogTranscript -and $host.Name -eq 'ConsoleHost') {
+        Stop-Transcript
+    }
 }

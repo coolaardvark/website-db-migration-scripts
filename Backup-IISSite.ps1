@@ -48,7 +48,7 @@ try {
         Throw 'You do not have Administrator rights to run this script!`nPlease re-run this script as an Administrator!'
     }
 
-    if (-not $OutputPath) {
+    if ($OutputPath.Length -gt 0) {
         if (-not (Test-Path $OutputPath)) {
             Throw "$OutputPath doesn't exist!"
         }
@@ -58,11 +58,6 @@ try {
     else {
         $OutputPath = "$env:HOMEDRIVE$env:HOMEPATH\Desktop"
     }
-
-    # Paths could well have spaces in them, so now we have done everything
-    # we need to do it, double quote the string to protect the spaces
-    # when passing as a parameter
-    $OutputPath = '"' + $OutputPath + '"'
 
     $siteObject = Get-Item -Path "IIS:\Sites\$($SiteName)"
     $sitePath = $siteObject.PhysicalPath
@@ -76,12 +71,13 @@ try {
     # I know this ia bit short of 2Gb!
     if ($siteSize -gt 200000000) {
         Write-Host 'Large site using msdeploy.exe directly'
-        # Have to create the directory for this my self, but remember I've double
-        # quoted this string, so need to strip them off then add the site name
-        $archivePath = $OutputPath.Trim('"') + "\$SiteName-archive"
+        # Have to create the directory for this my self
+        $archivePath = "$OutputPath\$SiteName-archive"
 
-        # Building the command line is very difficult
-        $MSDeployCmdLine = "& '$($deployExe)' '-verb=sync' '-source=apphostconfig=$SiteName' '-dest=archivedir=$archivePath'"
+        # Building the command line is very difficult, spaces need to
+        # be protected in paths, but I'm using both single and double quoted
+        # strings here, nightmare!
+        $MSDeployCmdLine = "& '$($deployExe)' '-verb=sync' '-source=apphostconfig=$SiteName' '-dest=archivedir=$("$archivePath")'"
         Invoke-Expression $MSDeployCmdLine -OutVariable MSDeployOutput
 
         Write-Host 'MSDeploy.exe output'
@@ -90,7 +86,8 @@ try {
         } 
     }
     else {
-        Backup-WDSite -Site $SiteName -SourceSettings @{ 'encryptPassword' = $encryptPassword } -IncludeAppPool -Output $outputPath
+        # Quote path to protect possilbe spaces in the path
+        Backup-WDSite -Site $SiteName -SourceSettings @{ 'encryptPassword' = $encryptPassword } -IncludeAppPool -Output "$OutputPath"
     }
 }
 Catch {

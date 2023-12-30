@@ -17,7 +17,7 @@
  .PARAMETER SiteAlais
     The Hostname the new web site will respond to.  Optional, if this is not
     passed, the sitename will be used.  If the name is not a full domain name
-    the name spesified in by the $domainName variable will be added.
+    the .aardman.com sufix will be added.
  .PARAMETER AppPoolUser
      The username the app pool for this site will run as.  If not spesified
      the default app pool user will be used.
@@ -43,7 +43,7 @@
  .EXAMPLE
      Create-IISWebSite -SiteName testsite -NoSSL -DevEnv
 
-     Will create a site that responds to testsite.dev.test.com runs as the default
+     Will create a site that responds to testsite.dev.aardman.com runs as the default
      app pool user and is only accesible on port 80. The site will be published to
      the dev server (as set by the Create-ISSWebSite.json file)
 
@@ -87,8 +87,6 @@ Param(
 
 Set-StrictMode -Version Latest
 
-$domainName = 'test.com'
-
 # Need to do this check before even attempting to load the WebAdminstration module!
 if (-not ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole] "Administrator")) {
     Throw "You do not have Administrator rights to run this script`nPlease re-run this script as an Administrator!"
@@ -126,10 +124,10 @@ function Add-SiteDNS {
     # Check if the name already exists, however we have a little problem here
     # our internal DNS is set up to resolve any unknown name to the address
     # of the external site so...
-    #$externalSiteAddress = (Resolve-DnsName "www.$domainName").IPAddress
+    #$externalSiteAddress = (Resolve-DnsName "domain.com").IPAddress
     #if ($newSiteAddress -eq $externalSiteAddress) {
         # No record exsists so create it
-    #    Add-DnsServerResourceRecord -CName -Name $HostName -HostNameAlias $HostServer -ZoneName "aardman.com" -ComputerName $dnsServer | Out-Null
+    #    Add-DnsServerResourceRecord -CName -Name $HostName -HostNameAlias $HostServer -ZoneName "domain.com" -ComputerName $dnsServer | Out-Null
     #    Write-Host "DNS record for $HostName created" 
     #}
     #else {
@@ -141,7 +139,7 @@ function Add-SiteDNS {
     # If the above block is uncommented, then this needs to be commented out
     if ($newSiteAddress -eq $null) {
         # No record exsists so create it
-        Add-DnsServerResourceRecord -CName -Name $HostName -HostNameAlias $HostServer -ZoneName $domainName -ComputerName $dnsServer | Out-Null
+        Add-DnsServerResourceRecord -CName -Name $HostName -HostNameAlias $HostServer -ZoneName "domain.com" -ComputerName $dnsServer | Out-Null
         Write-Host "DNS record for $HostName created" 
     }
     else {
@@ -260,8 +258,8 @@ try {
     $HostAndEnviroment = $HostHeader
 
     # We will have a host header set by now
-    if (-not $HostHeader.endswith($domainName)) {
-        $HostHeader = "$HostHeader.$domainName"
+    if (-not $HostHeader.endswith('domain.com')) {
+        $HostHeader = "$HostHeader.domain.com"
     }
 
     if (-not $SiteAppPool) {
